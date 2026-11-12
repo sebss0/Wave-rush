@@ -1,0 +1,95 @@
+
+name: Crear APK de WaveRush
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Preparar Java y Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Instalar Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Buscar y preparar proyecto
+        shell: bash
+        run: |
+          set -e
+
+          EXTRACT="$RUNNER_TEMP/waverush-unpacked"
+          mkdir -p "$EXTRACT"
+
+          while IFS= read -r -d '' file; do
+            dest="$EXTRACT/$(basename "${file%.zip}")"
+            mkdir -p "$dest"
+            unzip -oq "$file" -d "$dest"
+          done < <(find "$GITHUB_WORKSPACE" -type f -iname '*.zip' -not -path '*/.git/*' -print0)
+
+          PROJECT=""
+
+          for BASE in "$GITHUB_WORKSPACE" "$EXTRACT"; do
+            while IFS= read -r -d '' file; do
+              DIR="$(dirname "$file")"
+
+              if [ -f "$DIR/capacitor.config.json" ] && [ -f "$DIR/www/index.html" ]; then
+                PROJECT="$DIR"
+                break 2
+              fi
+            done < <(find "$BASE" -type f -name package.json \
+              -not -path '*/node_modules/*' \
+              -not -path '*/.git/*' \
+              -print0)
+          done
+
+          if [ -z "$PROJECT" ]; then
+            echo "ERROR: No encuentro un proyecto con package.json, capacitor.config.json y www/index.html."
+            echo "Archivos encontrados:"
+            find "$GITHUB_WORKSPACE" "$EXTRACT" -maxdepth 4 -type f | head -200
+            exit 1
+          fi
+
+          echo "PROJECT_DIR=$PROJECT" >> "$GITHUB_ENV"
+          echo "Proyecto encontrado: $PROJECT"
+
+      - name: Instalar dependencias
+        run: |
+          cd "$PROJECT_DIR"
+          npm install
+
+      - name: Crear proyecto Android
+        run: |
+          cd "$PROJECT_DIR"
+          if [ ! -d android ]; then
+            npx cap add android
+          fi
+
+      - name: Sincronizar Android
+        run: |
+          cd "$PROJECT_DIR"
+          npx cap sync android
+
+      - name: Compilar APK
+        run: |
+          cd "$PROJECT_DIR/android"
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Guardar APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: WaveRush-APK
+          path: ${{ env.PROJECT_DIR }}/android/app/build/outputs/apk/debug/app-debug.apk
