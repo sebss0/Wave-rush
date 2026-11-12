@@ -1,0 +1,78 @@
+
+name: Compilar WaveRush APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Configurar Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Buscar proyecto
+        id: project
+        shell: bash
+        run: |
+          set -e
+
+          PROJECT=""
+
+          while IFS= read -r -d '' file; do
+            DIR="$(dirname "$file")"
+
+            if [ -f "$DIR/capacitor.config.json" ] && [ -f "$DIR/www/index.html" ]; then
+              PROJECT="$DIR"
+              break
+            fi
+          done < <(find . -type f -name package.json \
+            ! -path '*/node_modules/*' \
+            ! -path '*/.git/*' \
+            ! -path '*/android/*' -print0)
+
+          if [ -z "$PROJECT" ]; then
+            echo "ERROR: No se encontró package.json junto a capacitor.config.json y www/index.html"
+            exit 1
+          fi
+
+          echo "project_dir=$PROJECT" >> "$GITHUB_OUTPUT"
+
+      - name: Instalar dependencias
+        working-directory: ${{ steps.project.outputs.project_dir }}
+        run: npm install
+
+      - name: Preparar Android
+        working-directory: ${{ steps.project.outputs.project_dir }}
+        run: npx cap add android
+
+      - name: Sincronizar Android
+        working-directory: ${{ steps.project.outputs.project_dir }}
+        run: npx cap sync android
+
+      - name: Compilar APK
+        working-directory: ${{ steps.project.outputs.project_dir }}/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Descargar APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: WaveRush-APK
+          path: ${{ steps.project.outputs.project_dir }}/android/app/build/outputs/apk/debug/app-debug.apk
